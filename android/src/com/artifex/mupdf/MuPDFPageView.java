@@ -23,6 +23,13 @@ public class MuPDFPageView extends PageView {
 
 		return mCore.hitLinkPage(mPageNumber, docRelX, docRelY);
 	}
+	
+	public SearchTaskResult selectText(float x, float y) {
+        float scale = mSourceScale*(float)getWidth()/(float)mSize.x;
+        float docRelX = (x - getLeft())/scale;
+        float docRelY = (y - getTop())/scale;
+        return mCore.selectText(mPageNumber, docRelX, docRelY);
+	}
 
 	@Override
 	protected Bitmap drawPage(int sizeX, int sizeY,

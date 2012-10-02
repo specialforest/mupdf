@@ -35,6 +35,7 @@ public class MuPDFCore
 	public static native boolean needsPasswordInternal();
 	public static native boolean authenticatePasswordInternal(String password);
 	public static native void destroying();
+	public static native SearchTaskResult selectTextInternal(int page, float x, float y);
 
 	public MuPDFCore(String filename) throws Exception
 	{
@@ -117,5 +118,10 @@ public class MuPDFCore
 
 	public synchronized boolean authenticatePassword(String password) {
 		return authenticatePasswordInternal(password);
+	}
+	
+	public synchronized SearchTaskResult selectText(int page, float x, float y)
+	{
+	    return selectTextInternal(page, x, y);
 	}
 }

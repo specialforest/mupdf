@@ -216,6 +216,16 @@ public class MuPDFActivity extends Activity
 				}
 				return super.onSingleTapUp(e);
 			}
+			
+			public void onLongPress(MotionEvent e) {
+			    MuPDFPageView pageView = (MuPDFPageView) mDocView.getDisplayedView();
+			    SearchTaskResult selection = pageView.selectText(e.getX(), e.getY());
+			    if (selection != null)
+			    {
+			        SearchTaskResult.set(selection);
+			        mDocView.resetupChildren();
+			    }
+			}
 
 			public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
 				if (!showButtonsDisabled)

@@ -3,8 +3,10 @@
 #include <android/log.h>
 #include <android/bitmap.h>
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 
 #include "fitz.h"
@@ -656,4 +658,191 @@ Java_com_artifex_mupdf_MuPDFCore_getPageLink(JNIEnv * env, jobject thiz, int pag
 	else if (link->dest.kind == FZ_LINK_GOTO)
 		return link->dest.ld.gotor.page;
 	return -1;
+}
+
+struct text_char_position_s
+{
+	fz_text_page *page;
+	fz_text_block *block;
+	fz_text_line *line;
+	fz_text_span *span;
+	fz_text_char *text;
+};
+
+typedef struct text_char_position_s text_char_position;
+
+static jboolean pointInRect(const fz_rect* rect, const fz_point* point)
+{
+	return (point->x >= rect->x0 && point->x <= rect->x1 &&
+			point->y >= rect->y0 && point->y <= rect->y1 ) ? JNI_TRUE : JNI_FALSE;
+}
+
+static getCharAt(fz_text_page *page, fz_point* point, text_char_position* result)
+{
+	memset(result, 0, sizeof(*result));
+	result->page = page;
+
+	// simple left-to-right scan
+	for (result->block = page->blocks; result->block < page->blocks + page->len; result->block++)
+	{
+		if (!pointInRect(&result->block->bbox, point))
+		{
+			continue;
+		}
+
+		for (result->line = result->block->lines; result->line < result->block->lines + result->block->len; result->line++)
+		{
+			if (!pointInRect(&result->line->bbox, point))
+			{
+				continue;
+			}
+
+			for (result->span = result->line->spans; result->span < result->line->spans + result->line->len; result->span++)
+			{
+				if (!pointInRect(&result->span->bbox, point))
+				{
+					continue;
+				}
+
+				for (result->text = result->span->text; result->text < result->span->text + result->span->len; result->text++)
+				{
+					if (pointInRect(&result->text->bbox, point))
+					{
+						return;
+					}
+				}
+			}
+		}
+	}
+}
+
+static char *extractText(fz_text_span *span)
+{
+	fz_text_char *c = 0;
+	int len = 0;
+	char *buffer = 0;
+	char *pos = 0;
+
+	for (c = span->text; c < span->text + span->len; c++)
+	{
+		len = len + fz_runelen(c->c);
+	}
+
+	buffer = fz_malloc(ctx, len + 1);
+	pos = buffer;
+	for (c = span->text; c < span->text + span->len; c++)
+	{
+		pos = pos + fz_runetochar(pos, c->c);
+	}
+
+	*pos = 0;
+	return buffer;
+}
+
+static void textAt(fz_text_page *page, fz_point *point, fz_rect *textRect, char **text)
+{
+	text_char_position targetChar;
+
+	*textRect = fz_empty_rect;
+	*text = NULL;
+	getCharAt(page, point, &targetChar);
+	if (targetChar.text)
+	{
+		// for now select whole span
+		*textRect = targetChar.span->bbox;
+		*text = extractText(targetChar.span);
+	}
+}
+
+jobject createTextSelection(JNIEnv *env, int page, fz_rect *textRect, char *text)
+{
+	jmethodID textSelectionCtor = 0;
+	jclass textSelectionClass = NULL;
+	jobject textSelectionObject = NULL;
+	jstring selectedText = NULL;
+	jclass rectClass = NULL;
+	jmethodID rectCtor = 0;
+	jobjectArray selectedTextRects = NULL;
+	jobject rect = NULL;
+
+	rectClass = (*env)->FindClass(env, "android/graphics/RectF");
+	if ((*env)->ExceptionCheck(env)) goto error;
+	rectCtor = (*env)->GetMethodID(env, rectClass, "<init>", "(FFFF)V");
+	if (!rectCtor) goto error;
+
+	textSelectionClass = (*env)->FindClass(env, "com/artifex/mupdf/SearchTaskResult");
+	if ((*env)->ExceptionCheck(env)) goto error;
+	textSelectionCtor = (*env)->GetMethodID(env, textSelectionClass, "<init>", "(Ljava/lang/String;I[Landroid/graphics/RectF;)V");
+	if (!textSelectionCtor) goto error;
+
+	selectedText = (*env)->NewStringUTF(env, text);
+	if ((*env)->ExceptionCheck(env)) goto error;
+
+	selectedTextRects = (*env)->NewObjectArray(env, 1, rectClass, NULL);
+	if ((*env)->ExceptionCheck(env)) goto error;
+	rect = (*env)->NewObject(env, rectClass, rectCtor,
+			(float) (textRect->x0), (float) (textRect->y0),
+			(float) (textRect->x1), (float) (textRect->y1));
+	if ((*env)->ExceptionCheck(env)) goto error;
+	(*env)->SetObjectArrayElement(env, selectedTextRects, 0, rect);
+	(*env)->DeleteLocalRef(env, rect);
+
+	textSelectionObject = (*env)->NewObject(env, textSelectionClass, textSelectionCtor, selectedText, page, selectedTextRects);
+	if ((*env)->ExceptionCheck(env)) goto error;
+	(*env)->DeleteLocalRef(env, textSelectionObject);
+	return textSelectionObject;
+
+error:
+	(*env)->DeleteLocalRef(env, textSelectionClass);
+	(*env)->DeleteLocalRef(env, textSelectionObject);
+	(*env)->DeleteLocalRef(env, selectedText);
+	(*env)->DeleteLocalRef(env, rectClass);
+	(*env)->DeleteLocalRef(env, selectedTextRects);
+	(*env)->DeleteLocalRef(env, rect);
+	return NULL;
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_artifex_mupdf_MuPDFCore_selectTextInternal(JNIEnv * env, jobject thiz, int pageNumber, float x, float y)
+{
+	fz_text_sheet *sheet = NULL;
+	fz_text_page *page = NULL;
+	fz_device *dev  = NULL;
+	float zoom;
+	fz_matrix ctm;
+	fz_point targetPoint;
+	fz_rect textRect;
+	char *text = NULL;
+
+	fz_var(sheet);
+	fz_var(page);
+	fz_var(dev);
+
+	fz_try(ctx)
+	{
+		fz_rect rect;
+		zoom = resolution / 72;
+		ctm = fz_scale(zoom, zoom);
+		rect = fz_transform_rect(ctm, currentMediabox);
+		sheet = fz_new_text_sheet(ctx);
+		page = fz_new_text_page(ctx, rect);
+		dev  = fz_new_text_device(ctx, sheet, page);
+		fz_run_page(doc, currentPage, dev, ctm, NULL);
+		fz_free_device(dev);
+	}
+	fz_catch(ctx)
+	{
+		fz_free_device(dev);
+		fz_free_text_page(ctx, page);
+		fz_free_text_sheet(ctx, sheet);
+		return NULL;
+	}
+
+	targetPoint.x = x;
+	targetPoint.y = y;
+	textAt(page, &targetPoint, &textRect, &text);
+
+	fz_free_text_page(ctx, page);
+	fz_free_text_sheet(ctx, sheet);
+	return text ? createTextSelection(env, pageNumber, &textRect, text) : NULL;
 }
