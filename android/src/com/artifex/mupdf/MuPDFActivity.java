@@ -31,27 +31,6 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.ViewSwitcher;
 
-class SearchTaskResult {
-	public final String txt;
-	public final int   pageNumber;
-	public final RectF searchBoxes[];
-	static private SearchTaskResult singleton;
-
-	SearchTaskResult(String _txt, int _pageNumber, RectF _searchBoxes[]) {
-		txt = _txt;
-		pageNumber = _pageNumber;
-		searchBoxes = _searchBoxes;
-	}
-
-	static public SearchTaskResult get() {
-		return singleton;
-	}
-
-	static public void set(SearchTaskResult r) {
-		singleton = r;
-	}
-}
-
 class ProgressDialogX extends ProgressDialog {
 	public ProgressDialogX(Context context) {
 		super(context);
